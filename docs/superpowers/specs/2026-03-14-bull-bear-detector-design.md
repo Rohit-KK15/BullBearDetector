@@ -111,7 +111,7 @@ bull-bear-detector/
 | Trades | `trades:{asset}` | `{ asset, exchange, price, qty, side, ts }` |
 | Depth | `depth:{asset}` | `{ asset, exchange, bids, asks, ts }` (top 10 levels) |
 | Funding | `funding:{asset}` | `{ asset, exchange, rate, markPrice, ts }` |
-| Features | `features:{asset}` | `{ asset, logReturn, volatility, volumeSpike, orderFlowImb, depthImb, fundingSentiment, ts }` |
+| Features | `features:{asset}` | `{ asset, momentum, ofi, depthImb, fundingSentiment, volatility, volumeRatio, direction, conviction, ts }` |
 | Regime | `regime:{asset}` | `{ asset, score, label, components, ts }` |
 
 - Consumer groups per module (e.g., `feature-engine` reads from trades, depth, funding)
@@ -124,12 +124,17 @@ bull-bear-detector/
 CREATE TABLE features (
     ts                    DateTime64(3, 'UTC'),
     asset                 LowCardinality(String),
-    log_return            Float64,
-    volatility            Float64,
-    volume_spike          Float64,
+    -- directional signals (all [-1, +1])
+    momentum              Float64,
     order_flow_imbalance  Float64,
     depth_imbalance       Float64,
-    funding_sentiment     Float64
+    funding_sentiment     Float64,
+    -- conviction signals
+    volatility_percentile Float64,   -- [0, 1]
+    volume_ratio          Float64,   -- raw ratio vs EMA
+    -- composite
+    direction             Float64,   -- weighted directional sum [-1, +1]
+    conviction            Float64    -- composite confidence [0, 1]
 ) ENGINE = MergeTree()
 ORDER BY (asset, ts)
 TTL ts + INTERVAL 90 DAY;
@@ -139,12 +144,15 @@ CREATE TABLE regime_scores (
     asset                 LowCardinality(String),
     score                 Float64,
     label                 LowCardinality(String),
-    return_component      Float64,
-    volatility_component  Float64,
-    volume_component      Float64,
+    -- direction breakdown
+    momentum_component    Float64,
     flow_component        Float64,
     depth_component       Float64,
-    funding_component     Float64
+    funding_component     Float64,
+    -- conviction breakdown
+    vol_confidence        Float64,
+    volume_confidence     Float64,
+    signal_agreement      Float64
 ) ENGINE = MergeTree()
 ORDER BY (asset, ts)
 TTL ts + INTERVAL 90 DAY;
@@ -153,98 +161,147 @@ TTL ts + INTERVAL 90 DAY;
 - `MergeTree` ordered by `(asset, ts)` for fast range queries
 - 90-day TTL keeps storage bounded
 - `LowCardinality` for low-cardinality string columns
+- Features table stores both raw signals and composites for debugging/charting
+- Regime table stores direction components + conviction factors separately
 
 ## Signal Algorithms
 
-### 1. Rolling Log Returns
-```
-logReturn = ln(markPrice_now / markPrice_5s_ago)
-```
-Computed from mark price (fair value across exchanges) per 5-second window. Mark price is preferred over last trade price for perps as it's less susceptible to manipulation.
+The regime score separates **direction** (which way the market is leaning) from **conviction** (how confident we should be in that lean). This prevents noisy or contradictory signals from producing misleading scores.
 
-### 2. Realized Volatility
-```
-vol = stddev(logReturns over last 60 samples)  // 5-minute window
-```
-Scaled to [0, 1] using a rolling percentile rank.
+### Directional Signals
 
-### 3. Volume Spike
-```
-volumeSpike = volume_5s / ema(volume_5s, 60)  // ratio vs 5-min EMA
-```
-Ratio > 1 means above-average volume. Confirms trend strength.
+All directional signals are normalized to [-1, +1].
 
-### 4. Order Flow Imbalance
-```
-buyVolume  = sum(trade.qty where side == 'buy')   // 5s window
-sellVolume = sum(trade.qty where side == 'sell')
-ofi = (buyVolume - sellVolume) / (buyVolume + sellVolume)
-```
-Range [-1, +1]. Positive = aggressive buying dominance.
+#### 1. Multi-Timeframe Momentum
 
-### 5. Orderbook Depth Imbalance
 ```
-bidDepth = sum(qty for top 10 bid levels)
-askDepth = sum(qty for top 10 ask levels)
-depthImb = (bidDepth - askDepth) / (bidDepth + askDepth)
-```
-Range [-1, +1]. Positive = more bid support.
+r_1m  = zscore(ln(markPrice_now / markPrice_1m_ago),  window=60)
+r_5m  = zscore(ln(markPrice_now / markPrice_5m_ago),  window=60)
+r_15m = zscore(ln(markPrice_now / markPrice_15m_ago), window=60)
 
-### 6. Funding Sentiment
-```
-fundingSentiment = clamp(fundingRate / 0.01, -1, 1)
-```
-Funding rate normalized to [-1, +1]. Positive funding = longs pay shorts = bullish crowding. Negative = bearish crowding. Divided by 0.01 (1% — a high but not extreme rate) as the scaling factor.
-
-### 7. Regime Score
-
-**Step 1 — compute raw directional score:**
-```
-rawScore = w1 * zscore(logReturn)
-         + w2 * ofi
-         + w3 * depthImb
-         + w6 * fundingSentiment
+momentum = 0.5 * r_1m + 0.3 * r_5m + 0.2 * r_15m
 ```
 
-**Step 2 — compute modifiers (using rawScore):**
+- Mark price is used instead of last trade price — it's the fair value across exchanges and less susceptible to manipulation on perps.
+- `zscore()` computes a rolling z-score over `window` samples, clamps to [-3, +3], then divides by 3 → output [-1, +1].
+- Short timeframe weighted highest for responsiveness; longer timeframes confirm the trend. A single 5s return would flip-flop on noise — multi-timeframe smooths this while remaining reactive.
+- The 1m, 5m, and 15m look-back prices are maintained as rolling buffers of mark price snapshots (sampled every 5s tick).
+
+#### 2. Dollar-Weighted Order Flow Imbalance
+
 ```
-volAdjustment       = -(max(0, volatility - 0.5)) * sign(rawScore)
-volumeConfirmation  = sign(rawScore) * max(0, volumeSpike - 1) * 0.5
+buyDollarVol  = sum(price * qty where takerSide == 'buy')   // 1-min rolling window
+sellDollarVol = sum(price * qty where takerSide == 'sell')
+ofi = (buyDollarVol - sellDollarVol) / (buyDollarVol + sellDollarVol)
 ```
 
-**Step 3 — final score:**
-```
-score = rawScore + w4 * volAdjustment + w5 * volumeConfirmation
-```
-Clamped to [-1, +1].
+- Range [-1, +1]. Positive = net aggressive buying.
+- Dollar-weighted so a single $5M market buy moves the needle more than 1000 tiny trades. Raw quantity-based OFI treats a 0.001 BTC trade the same as a 50 BTC whale order.
+- `takerSide` is the aggressor side from CCXT trade data — a taker buy (lifting the ask) is bullish.
+- 1-min rolling window (not 5s) for a more stable reading while still being responsive.
 
-**Weights:**
-| Factor | Weight | Rationale |
+#### 3. Distance-Weighted Depth Imbalance
+
+```
+weight_i = 1 / (i + 1)    // i=0 (best bid/ask) → 1.0, i=9 → 0.1
+
+bidStrength = sum(qty_i * weight_i for top 10 bid levels)
+askStrength = sum(qty_i * weight_i for top 10 ask levels)
+depthImb = (bidStrength - askStrength) / (bidStrength + askStrength)
+```
+
+- Range [-1, +1]. Positive = more weighted bid support.
+- Distance weighting: a 500 BTC bid at the best price is 10x more significant than 500 BTC ten levels deep. Flat weighting would overstate the importance of deep liquidity that may never get hit.
+- Aggregated across all connected exchanges (sum all bid/ask levels, then compute imbalance).
+
+#### 4. Funding Sentiment
+
+```
+avgFundingRate = mean(latestFundingRate across connected exchanges)
+fundingSentiment = clamp(avgFundingRate / 0.0003, -1, 1)
+```
+
+- Range [-1, +1]. Positive funding = longs pay shorts = bullish crowding.
+- Scaling factor: 0.0003 (3 basis points per 8h). Typical BTC funding is ~0.01% (0.0001). At normal funding, this produces `0.0001/0.0003 = 0.33` — a moderate signal. Extreme funding of 0.1% (0.001) saturates at 1.0.
+- Averaged across exchanges to reduce single-exchange anomalies.
+- Funding rate updates less frequently than other signals (every 8h on most exchanges). Between updates, the last known rate is held constant.
+
+### Conviction Signals
+
+Conviction signals determine how much to trust the directional score. They are not directional themselves.
+
+#### 5. Volatility Regime Confidence
+
+```
+realizedVol = stddev(5s_logReturns over last 60 samples)  // 5-min window
+volPercentile = rollingPercentileRank(realizedVol, window=720)  // 1-hour history
+
+volConfidence:
+  volPercentile < 0.2  → 0.5   (dead market — signals unreliable, low participation)
+  volPercentile 0.2–0.8 → 1.0  (normal trending — signals most trustworthy)
+  volPercentile > 0.8  → 0.6   (chaotic — signals conflicting, whipsaw risk)
+```
+
+- Range [0.5, 1.0]. Linear interpolation between zone boundaries.
+- The 5s log return for vol calculation: `ln(markPrice_now / markPrice_5s_ago)`.
+- Percentile rank over 720 samples (1 hour at 5s intervals) provides adaptive thresholds — what counts as "high vol" adjusts to current market conditions.
+
+#### 6. Volume Confirmation
+
+```
+dollarVolume_1m = sum(price * qty for all trades in last 1 min)
+volumeRatio = dollarVolume_1m / ema(dollarVolume_1m, 30)  // vs 30-min EMA
+
+volumeConfidence = clamp(0.3 + 0.7 * min(volumeRatio, 2.0) / 2.0, 0.3, 1.0)
+```
+
+- Range [0.3, 1.0]. Floor at 0.3 — never fully ignore the directional signal even in quiet markets.
+- Dollar volume (not trade count) so a few large trades properly boost confidence.
+- At 1x EMA (average volume): confidence = 0.65. At 2x+ EMA: confidence = 1.0.
+
+#### 7. Signal Agreement
+
+```
+signs = [sign(momentum), sign(ofi), sign(depthImb)]
+agreementRatio = abs(sum(signs)) / 3    // 1.0 if all 3 agree, 0.33 if all disagree
+
+signalAgreement = 0.5 + 0.5 * agreementRatio
+```
+
+- Range [0.5, 1.0]. All signals agree → 1.0. Mixed signals → as low as 0.5.
+- Only the three main directional signals are checked (momentum, order flow, depth). Funding is excluded because it updates infrequently and often lags.
+- This prevents the score from being strong when signals contradict each other — e.g., price rising but order flow selling and book thinning on the bid side.
+
+### Regime Score Computation
+
+**Step 1 — Direction:**
+```
+direction = 0.35 * momentum + 0.30 * ofi + 0.20 * depthImb + 0.15 * fundingSentiment
+```
+
+| Signal | Weight | Rationale |
 |--------|--------|-----------|
-| Returns (w1) | 0.25 | Strongest directional signal |
-| Order Flow (w2) | 0.25 | Leading indicator |
-| Depth (w3) | 0.15 | Support/resistance pressure |
-| Volatility (w4) | 0.15 | Regime confidence modifier |
-| Volume (w5) | 0.10 | Trend confirmation |
-| Funding (w6) | 0.10 | Crowding/sentiment indicator |
+| Momentum | 0.35 | Strongest directional signal, multi-timeframe smoothed |
+| Order Flow | 0.30 | Leading indicator — aggressive takers move price |
+| Depth | 0.20 | Support/resistance pressure from resting orders |
+| Funding | 0.15 | Crowding/sentiment — contrarian at extremes |
 
-**Normalization:**
-- `zscore()` applies a rolling z-score clamped to [-3, +3], then divided by 3 to produce [-1, +1]. Applied only to `logReturn` since it has unbounded range.
-- `ofi`, `depthImb`, and `fundingSentiment` are already bounded to [-1, +1] and pass through as-is.
+Direction range: [-1, +1] (since all inputs are [-1, +1] and weights sum to 1.0).
 
-**Modifiers:**
-- `volAdjustment` pulls score toward 0 when volatility is extreme (high uncertainty → more neutral). Only activates when volatility > 0.5 (above median), otherwise contributes zero.
-- `volumeConfirmation` amplifies the directional signal when volume exceeds its EMA. Only activates when `volumeSpike > 1` (above average), otherwise contributes zero.
+**Step 2 — Conviction:**
+```
+conviction = volConfidence * volumeConfidence * signalAgreement
+```
 
-**Component values:** The API and WebSocket return 6 component values representing each factor's contribution to the final score:
-- `return`: `w1 * zscore(logReturn)`
-- `flow`: `w2 * ofi`
-- `depth`: `w3 * depthImb`
-- `volatility`: `w4 * volAdjustment`
-- `volume`: `w5 * volumeConfirmation`
-- `funding`: `w6 * fundingSentiment`
+Conviction range: [0.075, 1.0] (product of three [0.3–0.5, 1.0] ranges). In practice, the floor is higher since all three factors rarely bottom out simultaneously.
 
-All components are bounded to [-1, +1]. The sum of all 6 components equals the final `score` (before clamping).
+**Step 3 — Final Score:**
+```
+score = clamp(direction * conviction * 1.5, -1, 1)
+```
+
+- The 1.5 scaling factor compensates for conviction always being ≤ 1.0, ensuring the score can reach ±1.0 when direction is strong and conviction is high.
+- Without scaling: max possible score = 1.0 * 1.0 * 1.0 = 1.0 (only when everything is perfect). With 1.5: a direction of 0.7 with full conviction produces 1.05 → clamped to 1.0. This makes strong-but-not-perfect signals still register as clearly bullish/bearish.
 
 **Classification:**
 | Score Range | Label |
@@ -253,7 +310,24 @@ All components are bounded to [-1, +1]. The sum of all 6 components equals the f
 | -0.3 to 0.3 | neutral |
 | < -0.3 | bear |
 
-Final score clamped to [-1, +1]. Thresholds and weights are constants in `packages/shared`.
+Thresholds and weights are constants in `packages/shared`.
+
+### API Component Values
+
+The API and WebSocket return two groups of components:
+
+**Direction components** (weighted contributions, each bounded [-1, +1]):
+- `momentum`: `0.35 * momentum`
+- `flow`: `0.30 * ofi`
+- `depth`: `0.20 * depthImb`
+- `funding`: `0.15 * fundingSentiment`
+
+**Conviction factors** (each [0, 1]):
+- `volConfidence`: volatility regime confidence
+- `volumeConfidence`: volume confirmation factor
+- `signalAgreement`: directional signal agreement
+
+The `score` equals `clamp(sum(direction_components) * product(conviction_factors) * 1.5, -1, 1)`.
 
 ## API
 
@@ -282,20 +356,23 @@ Final score clamped to [-1, +1]. Thresholds and weights are constants in `packag
 {
   "type": "regime",
   "asset": "BTC",
-  "score": 0.44,
+  "score": 0.78,
   "label": "bull",
-  "components": {
-    "return": 0.18,
-    "flow": 0.10,
-    "depth": 0.08,
-    "volatility": -0.04,
-    "volume": 0.05,
-    "funding": 0.07
+  "direction": {
+    "momentum": 0.196,
+    "flow": 0.135,
+    "depth": 0.080,
+    "funding": 0.150
+  },
+  "conviction": {
+    "volConfidence": 1.0,
+    "volumeConfidence": 0.93,
+    "signalAgreement": 1.0
   },
   "ts": 1710000000000
 }
 ```
-Component values are weighted contributions, each bounded to [-1, +1]. They sum to the `score` (before clamping). See Signal Algorithms § Regime Score for formulas.
+Direction components are weighted contributions (weight * signal). Conviction factors are multiplied together. See Signal Algorithms for formulas.
 
 ### REST Response Schemas
 
@@ -305,9 +382,10 @@ Component values are weighted contributions, each bounded to [-1, +1]. They sum 
   "data": [
     {
       "asset": "BTC",
-      "score": 0.44,
+      "score": 0.78,
       "label": "bull",
-      "components": { "return": 0.18, "flow": 0.10, "depth": 0.08, "volatility": -0.04, "volume": 0.05, "funding": 0.07 },
+      "direction": { "momentum": 0.196, "flow": 0.135, "depth": 0.080, "funding": 0.150 },
+      "conviction": { "volConfidence": 1.0, "volumeConfidence": 0.93, "signalAgreement": 1.0 },
       "ts": 1710000000000
     }
   ]
@@ -318,16 +396,17 @@ Component values are weighted contributions, each bounded to [-1, +1]. They sum 
 ```json
 {
   "asset": "BTC",
-  "score": 0.62,
+  "score": 0.78,
   "label": "bull",
-  "components": { "return": 0.18, "flow": 0.10, "depth": 0.08, "volatility": -0.04, "volume": 0.05, "funding": 0.07 },
+  "direction": { "momentum": 0.196, "flow": 0.135, "depth": 0.080, "funding": 0.150 },
+  "conviction": { "volConfidence": 1.0, "volumeConfidence": 0.93, "signalAgreement": 1.0 },
   "features": {
-    "logReturn": 0.0012,
-    "volatility": 0.34,
-    "volumeSpike": 1.2,
-    "orderFlowImb": 0.41,
-    "depthImb": 0.55,
-    "fundingSentiment": 0.72
+    "momentum": 0.56,
+    "ofi": 0.45,
+    "depthImb": 0.40,
+    "fundingSentiment": 1.00,
+    "volatilityPercentile": 0.45,
+    "volumeRatio": 1.8
   },
   "ts": 1710000000000
 }
@@ -337,12 +416,12 @@ Component values are weighted contributions, each bounded to [-1, +1]. They sum 
 ```json
 {
   "asset": "BTC",
-  "logReturn": 0.0012,
-  "volatility": 0.34,
-  "volumeSpike": 1.2,
-  "orderFlowImb": 0.41,
-  "depthImb": 0.55,
-  "fundingSentiment": 0.72,
+  "momentum": 0.56,
+  "ofi": 0.45,
+  "depthImb": 0.40,
+  "fundingSentiment": 1.00,
+  "volatilityPercentile": 0.45,
+  "volumeRatio": 1.8,
   "ts": 1710000000000
 }
 ```
@@ -372,11 +451,9 @@ Component values are weighted contributions, each bounded to [-1, +1]. They sum 
 ### Asset Detail Page (`/asset/:id`)
 - Large regime score display with label
 - Regime oscillator chart (full-width, time-selectable)
-- Realized volatility chart
-- Order flow imbalance chart
-- Volume chart
-- Depth imbalance chart
-- Score component breakdown with individual values and weights
+- Direction breakdown: momentum, order flow, depth imbalance, funding sentiment
+- Conviction gauges: volatility regime, volume confirmation, signal agreement
+- Raw signal charts: multi-timeframe momentum, OFI, depth imbalance over time
 
 ### Real-time Updates
 - WebSocket connection subscribes to all assets on overview, single asset on detail page

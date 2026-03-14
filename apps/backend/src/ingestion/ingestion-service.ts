@@ -29,7 +29,7 @@ async function watchTradesLoop(exchange: any, redis: Redis, asset: Asset, exchan
       const trades = await exchange.watchTrades(symbol);
       for (const t of trades) {
         const trade = normalizeTrade(t, asset, exchangeId);
-        await publishToStream(redis, STREAM_KEYS.trades(asset), trade);
+        await publishToStream(redis, STREAM_KEYS.trades(asset), trade as unknown as Record<string, string | number>);
       }
     } catch (err) {
       console.error(`Trade watch error ${exchangeId}/${asset}:`, err);
@@ -43,7 +43,13 @@ async function watchOrderBookLoop(exchange: any, redis: Redis, asset: Asset, exc
     try {
       const ob = await exchange.watchOrderBook(symbol);
       const snapshot = normalizeOrderBook(ob, asset, exchangeId);
-      await publishToStream(redis, STREAM_KEYS.depth(asset), snapshot);
+      await publishToStream(redis, STREAM_KEYS.depth(asset), {
+        asset: snapshot.asset,
+        exchange: snapshot.exchange,
+        bids: JSON.stringify(snapshot.bids),
+        asks: JSON.stringify(snapshot.asks),
+        ts: snapshot.ts,
+      });
     } catch (err) {
       console.error(`OrderBook watch error ${exchangeId}/${asset}:`, err);
       await new Promise(r => setTimeout(r, 5000));
@@ -56,7 +62,7 @@ async function pollFundingRate(exchange: any, redis: Redis, asset: Asset, exchan
     try {
       const funding = await exchange.fetchFundingRate(symbol);
       const update = normalizeFunding(funding, asset, exchangeId);
-      await publishToStream(redis, STREAM_KEYS.funding(asset), update);
+      await publishToStream(redis, STREAM_KEYS.funding(asset), update as unknown as Record<string, string | number>);
     } catch (err) {
       console.error(`Funding poll error ${exchangeId}/${asset}:`, err);
     }

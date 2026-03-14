@@ -1,0 +1,22 @@
+FROM node:20-alpine AS pruner
+WORKDIR /app
+RUN corepack enable pnpm && npm i -g turbo
+COPY . .
+RUN turbo prune @bull-bear/backend --docker
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+RUN corepack enable pnpm
+COPY --from=pruner /app/out/json/ .
+COPY --from=pruner /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
+RUN pnpm install --frozen-lockfile
+COPY --from=pruner /app/out/full/ .
+RUN pnpm --filter @bull-bear/backend build
+
+FROM node:20-alpine
+WORKDIR /app
+COPY --from=builder /app/apps/backend/dist ./dist
+COPY --from=builder /app/apps/backend/node_modules ./node_modules
+COPY --from=builder /app/node_modules ./root_modules
+ENV NODE_PATH=./root_modules
+CMD ["node", "dist/index.js"]

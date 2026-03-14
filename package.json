@@ -1,0 +1,21 @@
+{
+  "name": "bullbeardetector",
+  "version": "1.0.0",
+  "description": "Real-time crypto market regime detector",
+  "private": true,
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "test": "turbo run test",
+    "lint": "turbo run lint"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.28.1",
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "turbo": "^2.8.17",
+    "typescript": "^5.9.3"
+  }
+}

@@ -17,7 +17,8 @@ interface AssetAccumulators {
   funding: FundingAccumulator;
   volatility: VolatilityAccumulator;
   volume: VolumeAccumulator;
-  lastPrice: number;
+  lastPrice: number;    // used for volatility log returns (sampled at 5s tick)
+  markPrice: number;    // latest mark price from funding stream
 }
 
 function createAccumulators(): AssetAccumulators {
@@ -29,6 +30,7 @@ function createAccumulators(): AssetAccumulators {
     volatility: new VolatilityAccumulator(),
     volume: new VolumeAccumulator(),
     lastPrice: 0,
+    markPrice: 0,
   };
 }
 
@@ -59,10 +61,21 @@ export async function startFeatureEngine(redis: Redis): Promise<void> {
     }
   }, 60_000);
 
-  // Emit features every 5s
+  // Emit features every 5s — also sample mark price for momentum + volatility
   setInterval(async () => {
     for (const asset of ASSETS) {
       const acc = accumulators.get(asset)!;
+
+      // Sample mark price at 5s cadence for momentum and volatility
+      // (spec: use mark price, not trade price, sampled at tick interval)
+      if (acc.markPrice > 0) {
+        acc.momentum.addPrice(acc.markPrice);
+        if (acc.lastPrice > 0) {
+          acc.volatility.addReturn(Math.log(acc.markPrice / acc.lastPrice));
+        }
+        acc.lastPrice = acc.markPrice;
+      }
+
       const snapshot = computeFeatureSnapshot(asset, acc);
       await publishToStream(redis, STREAM_KEYS.features(asset), snapshot as any);
       await setState(redis, REDIS_STATE_KEYS.features(asset), snapshot);
@@ -123,13 +136,7 @@ async function consumeTradeStream(redis: Redis, asset: Asset, acc: AssetAccumula
         };
         acc.orderFlow.addTrade(trade);
         acc.volume.addTrade(trade);
-
-        // Update momentum with latest price + volatility with log return
-        if (acc.lastPrice > 0) {
-          acc.volatility.addReturn(Math.log(trade.price / acc.lastPrice));
-        }
-        acc.lastPrice = trade.price;
-        acc.momentum.addPrice(trade.price);
+        // Mark price for momentum/volatility is sampled at 5s tick, not per-trade
 
         await ackMessage(redis, streamKey, GROUP, msg.id);
       }
@@ -180,9 +187,9 @@ async function consumeFundingStream(redis: Redis, asset: Asset, acc: AssetAccumu
           ts: Number(msg.fields.ts),
         };
         acc.funding.updateFunding(update);
-        // Also update momentum with mark price if available
-        if (Number(msg.fields.markPrice) > 0) {
-          acc.momentum.addPrice(Number(msg.fields.markPrice));
+        // Store mark price for sampling at 5s tick
+        if (update.markPrice > 0) {
+          acc.markPrice = update.markPrice;
         }
         await ackMessage(redis, streamKey, GROUP, msg.id);
       }

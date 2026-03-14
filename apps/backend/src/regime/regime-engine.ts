@@ -50,20 +50,18 @@ export async function startRegimeEngine(redis: Redis, clickhouse: ClickHouseClie
     await createConsumerGroup(redis, STREAM_KEYS.features(asset), GROUP);
   }
 
-  // Batch buffers for ClickHouse inserts
-  let featureBatch: FeatureSnapshot[] = [];
-  let regimeBatch: RegimeScore[] = [];
+  // Batch buffers for ClickHouse inserts (shared by reference with consumers)
+  const featureBatch: FeatureSnapshot[] = [];
+  const regimeBatch: RegimeScore[] = [];
 
   // Flush to ClickHouse every 10 seconds
   setInterval(async () => {
     if (featureBatch.length > 0) {
-      const batch = featureBatch;
-      featureBatch = [];
+      const batch = featureBatch.splice(0);
       await insertFeatures(clickhouse, batch).catch(console.error);
     }
     if (regimeBatch.length > 0) {
-      const batch = regimeBatch;
-      regimeBatch = [];
+      const batch = regimeBatch.splice(0);
       await insertRegimeScores(clickhouse, batch).catch(console.error);
     }
   }, 10_000);

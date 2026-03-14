@@ -133,31 +133,23 @@ export class DepthAccumulator {
   compute(): number {
     if (this.snapshots.size === 0) return 0;
 
-    let totalImbalance = 0;
-    let count = 0;
+    // Aggregate bid/ask quantities across all exchanges, then compute a single imbalance
+    let totalWeightedBidQty = 0;
+    let totalWeightedAskQty = 0;
 
     for (const snapshot of this.snapshots.values()) {
       const levels = DEPTH_LEVELS;
-      let weightedBidQty = 0;
-      let weightedAskQty = 0;
 
-      // Bids: best first (closest to mid), weight = 1/rank
       for (let i = 0; i < Math.min(snapshot.bids.length, levels); i++) {
-        const rank = i + 1;
-        weightedBidQty += snapshot.bids[i].qty * (1 / rank);
+        totalWeightedBidQty += snapshot.bids[i].qty * (1 / (i + 1));
       }
 
-      // Asks: best first (closest to mid), weight = 1/rank
       for (let i = 0; i < Math.min(snapshot.asks.length, levels); i++) {
-        const rank = i + 1;
-        weightedAskQty += snapshot.asks[i].qty * (1 / rank);
+        totalWeightedAskQty += snapshot.asks[i].qty * (1 / (i + 1));
       }
-
-      totalImbalance += safeRatio(weightedBidQty, weightedAskQty);
-      count++;
     }
 
-    return count === 0 ? 0 : totalImbalance / count;
+    return safeRatio(totalWeightedBidQty, totalWeightedAskQty);
   }
 }
 

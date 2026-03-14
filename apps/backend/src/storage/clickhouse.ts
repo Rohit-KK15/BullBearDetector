@@ -119,6 +119,16 @@ interface QueryHistoryRow {
 /**
  * Query time-bucketed regime score history for a given asset and time range.
  */
+// Map validated Interval values to ClickHouse INTERVAL expressions
+const INTERVAL_MAP: Record<Interval, string> = {
+  '5s': '5 SECOND',
+  '1m': '1 MINUTE',
+  '5m': '5 MINUTE',
+  '15m': '15 MINUTE',
+  '1h': '1 HOUR',
+  '1d': '1 DAY',
+};
+
 export async function queryHistory(
   client: ClickHouseClient,
   asset: Asset,
@@ -128,19 +138,25 @@ export async function queryHistory(
 ): Promise<HistoryPoint[]> {
   const fromTs = new Date(from).toISOString().replace('T', ' ').replace('Z', '');
   const toTs = new Date(to).toISOString().replace('T', ' ').replace('Z', '');
+  const chInterval = INTERVAL_MAP[interval];
 
   const query = `
     SELECT
-      toStartOfInterval(ts, INTERVAL ${interval}) as bucket_ts,
+      toStartOfInterval(ts, INTERVAL ${chInterval}) as bucket_ts,
       avg(score) as avg_score
     FROM bullbear.regime_scores
-    WHERE asset = '${asset}' AND ts >= '${fromTs}' AND ts <= '${toTs}'
+    WHERE asset = {asset:String} AND ts >= {from_ts:String} AND ts <= {to_ts:String}
     GROUP BY bucket_ts
     ORDER BY bucket_ts
   `;
 
   const result = await client.query({
     query,
+    query_params: {
+      asset,
+      from_ts: fromTs,
+      to_ts: toTs,
+    },
     format: 'JSONEachRow',
   });
 

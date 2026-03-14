@@ -112,8 +112,9 @@ bull-bear-detector/
 | Depth | `depth:{asset}` | `{ asset, exchange, bids, asks, ts }` (top 10 levels) |
 | Funding | `funding:{asset}` | `{ asset, exchange, rate, markPrice, ts }` |
 | Features | `features:{asset}` | `{ asset, momentum, ofi, depthImb, fundingSentiment, volatility, volumeRatio, direction, conviction, ts }` |
-| Regime | `regime:{asset}` | `{ asset, score, label, components, ts }` |
+| Regime | `regime:{asset}` | `{ asset, score, label, direction, conviction, momentumComp, flowComp, depthComp, fundingComp, volConf, volConf, sigAgree, ts }` |
 
+- The regime stream carries all breakdown fields as flat scalars. The API server restructures these into nested `direction` and `conviction` objects for the response.
 - Consumer groups per module (e.g., `feature-engine` reads from trades, depth, funding)
 - Max stream length capped with `MAXLEN ~10000`
 - Features and regime streams emit on 5-second cadence; raw streams are continuous
@@ -150,6 +151,8 @@ CREATE TABLE regime_scores (
     depth_component       Float64,
     funding_component     Float64,
     -- conviction breakdown
+    direction             Float64,    -- weighted sum of directional components
+    conviction            Float64,    -- product of conviction factors
     vol_confidence        Float64,
     volume_confidence     Float64,
     signal_agreement      Float64
@@ -175,27 +178,30 @@ All directional signals are normalized to [-1, +1].
 #### 1. Multi-Timeframe Momentum
 
 ```
-r_1m  = zscore(ln(markPrice_now / markPrice_1m_ago),  window=60)
-r_5m  = zscore(ln(markPrice_now / markPrice_5m_ago),  window=60)
-r_15m = zscore(ln(markPrice_now / markPrice_15m_ago), window=60)
+r_1m  = clamp(zscore(ln(markPrice_now / markPrice_1m_ago),  window=60), -3, 3) / 3
+r_5m  = clamp(zscore(ln(markPrice_now / markPrice_5m_ago),  window=60), -3, 3) / 3
+r_15m = clamp(zscore(ln(markPrice_now / markPrice_15m_ago), window=60), -3, 3) / 3
 
 momentum = 0.5 * r_1m + 0.3 * r_5m + 0.2 * r_15m
 ```
 
+- Each `r_Xm` is explicitly clamped to [-1, +1] via the `clamp(..., -3, 3) / 3` step. Since weights sum to 1.0 and all inputs are [-1, +1], `momentum` is guaranteed [-1, +1] with no additional clamping needed.
 - Mark price is used instead of last trade price — it's the fair value across exchanges and less susceptible to manipulation on perps.
-- `zscore()` computes a rolling z-score over `window` samples, clamps to [-3, +3], then divides by 3 → output [-1, +1].
+- `zscore()` computes a rolling z-score over `window` samples (mean and stddev of the last `window` values).
 - Short timeframe weighted highest for responsiveness; longer timeframes confirm the trend. A single 5s return would flip-flop on noise — multi-timeframe smooths this while remaining reactive.
 - The 1m, 5m, and 15m look-back prices are maintained as rolling buffers of mark price snapshots (sampled every 5s tick).
+- **Cold start:** until enough samples exist for a given timeframe, that term uses 0 and its weight is redistributed proportionally to the other terms.
 
 #### 2. Dollar-Weighted Order Flow Imbalance
 
 ```
 buyDollarVol  = sum(price * qty where takerSide == 'buy')   // 1-min rolling window
 sellDollarVol = sum(price * qty where takerSide == 'sell')
-ofi = (buyDollarVol - sellDollarVol) / (buyDollarVol + sellDollarVol)
+total = buyDollarVol + sellDollarVol
+ofi = total == 0 ? 0 : (buyDollarVol - sellDollarVol) / total
 ```
 
-- Range [-1, +1]. Positive = net aggressive buying.
+- Range [-1, +1]. Returns 0 when no trades exist in the window (startup, reconnection, thin markets). Positive = net aggressive buying.
 - Dollar-weighted so a single $5M market buy moves the needle more than 1000 tiny trades. Raw quantity-based OFI treats a 0.001 BTC trade the same as a 50 BTC whale order.
 - `takerSide` is the aggressor side from CCXT trade data — a taker buy (lifting the ask) is bullish.
 - 1-min rolling window (not 5s) for a more stable reading while still being responsive.
@@ -207,10 +213,11 @@ weight_i = 1 / (i + 1)    // i=0 (best bid/ask) → 1.0, i=9 → 0.1
 
 bidStrength = sum(qty_i * weight_i for top 10 bid levels)
 askStrength = sum(qty_i * weight_i for top 10 ask levels)
-depthImb = (bidStrength - askStrength) / (bidStrength + askStrength)
+total = bidStrength + askStrength
+depthImb = total == 0 ? 0 : (bidStrength - askStrength) / total
 ```
 
-- Range [-1, +1]. Positive = more weighted bid support.
+- Range [-1, +1]. Returns 0 when orderbook is empty (disconnected exchange, market open). Positive = more weighted bid support.
 - Distance weighting: a 500 BTC bid at the best price is 10x more significant than 500 BTC ten levels deep. Flat weighting would overstate the importance of deep liquidity that may never get hit.
 - Aggregated across all connected exchanges (sum all bid/ask levels, then compute imbalance).
 
@@ -258,18 +265,22 @@ volumeConfidence = clamp(0.3 + 0.7 * min(volumeRatio, 2.0) / 2.0, 0.3, 1.0)
 - Range [0.3, 1.0]. Floor at 0.3 — never fully ignore the directional signal even in quiet markets.
 - Dollar volume (not trade count) so a few large trades properly boost confidence.
 - At 1x EMA (average volume): confidence = 0.65. At 2x+ EMA: confidence = 1.0.
+- **Cold start:** `volumeRatio` defaults to 1.0 (neutral, confidence = 0.65) until the EMA has received at least one sample.
 
 #### 7. Signal Agreement
 
 ```
 signs = [sign(momentum), sign(ofi), sign(depthImb)]
-agreementRatio = abs(sum(signs)) / 3    // 1.0 if all 3 agree, 0.33 if all disagree
+agreementRatio = abs(sum(signs)) / 3
 
 signalAgreement = 0.5 + 0.5 * agreementRatio
 ```
 
-- Range [0.5, 1.0]. All signals agree → 1.0. Mixed signals → as low as 0.5.
-- Only the three main directional signals are checked (momentum, order flow, depth). Funding is excluded because it updates infrequently and often lags.
+- Range [0.5, 1.0].
+- All 3 non-zero and same sign → `agreementRatio = 1.0` → agreement = 1.0.
+- 2-vs-1 split (e.g., two bullish, one bearish) → `agreementRatio = 1/3` → agreement = 0.667.
+- Any signal exactly 0 (e.g., `sign(0) = 0`) reduces the sum, pulling agreement down further. Worst case (one signal each way + one zero) → `agreementRatio = 0` → agreement = 0.5.
+- Only the three main directional signals are checked. Funding is excluded because it updates infrequently and often lags.
 - This prevents the score from being strong when signals contradict each other — e.g., price rising but order flow selling and book thinning on the bid side.
 
 ### Regime Score Computation
@@ -293,7 +304,7 @@ Direction range: [-1, +1] (since all inputs are [-1, +1] and weights sum to 1.0)
 conviction = volConfidence * volumeConfidence * signalAgreement
 ```
 
-Conviction range: [0.075, 1.0] (product of three [0.3–0.5, 1.0] ranges). In practice, the floor is higher since all three factors rarely bottom out simultaneously.
+Conviction range: [0.075, 1.0] (product of floors: volConfidence=0.5 * volumeConfidence=0.3 * signalAgreement=0.5 = 0.075). In practice, the floor is higher since all three factors rarely bottom out simultaneously.
 
 **Step 3 — Final Score:**
 ```

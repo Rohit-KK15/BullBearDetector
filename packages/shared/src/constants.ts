@@ -1,4 +1,4 @@
-import type { Asset, Exchange } from './types.js';
+import type { Asset, Exchange } from './types';
 
 export const ASSETS: Asset[] = ['BTC', 'ETH', 'SOL'];
 

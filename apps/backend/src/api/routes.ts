@@ -3,7 +3,7 @@ import type { Redis } from 'ioredis';
 import type { ClickHouseClient } from '@clickhouse/client';
 import { ASSETS, AssetParam, HistoryQuery, REDIS_STATE_KEYS, type Asset } from '@bull-bear/shared';
 import { getState } from '../storage/redis.js';
-import { queryHistory } from '../storage/clickhouse.js';
+import { queryHistory, queryRegimeTransitions } from '../storage/clickhouse.js';
 
 export function registerRoutes(app: FastifyInstance, redis: Redis, clickhouse: ClickHouseClient) {
   // GET /api/regime — all assets
@@ -61,5 +61,21 @@ export function registerRoutes(app: FastifyInstance, redis: Redis, clickhouse: C
     );
 
     return { data: { asset: parsed.data, interval, data } };
+  });
+
+  // GET /api/transitions/:asset — regime change history
+  app.get('/api/transitions/:asset', async (req, reply) => {
+    const { asset } = req.params as { asset: string };
+    const parsed = AssetParam.safeParse(asset.toUpperCase());
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid asset' });
+
+    const { hours } = req.query as { hours?: string };
+    const data = await queryRegimeTransitions(
+      clickhouse,
+      parsed.data as Asset,
+      hours ? parseInt(hours, 10) : 24,
+    );
+
+    return { data };
   });
 }

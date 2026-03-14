@@ -1,9 +1,7 @@
 import type { Exchange } from '@bull-bear/shared';
+import ccxt from 'ccxt';
 
 export function createExchangeClient(exchangeId: Exchange) {
-  // Dynamic import avoids TypeScript namespace issues with ccxt's complex type exports
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const ccxt = require('ccxt');
-  const ExchangeClass = ccxt.pro[exchangeId];
+  const ExchangeClass = (ccxt.pro as Record<string, any>)[exchangeId];
   return new ExchangeClass({ newUpdates: true });
 }

@@ -8,7 +8,7 @@ function makeFeatures(overrides: Partial<FeatureSnapshot> = {}): FeatureSnapshot
     momentum: 0, ofi: 0, depthImb: 0, fundingSentiment: 0,
     volatilityPercentile: 0.5, volumeRatio: 1.0,
     volConfidence: 1.0, volumeConfidence: 1.0,
-    direction: 0, conviction: 0, ts: Date.now(),
+    direction: 0, conviction: 0, markPrice: 50000, ts: Date.now(),
     ...overrides,
   };
 }

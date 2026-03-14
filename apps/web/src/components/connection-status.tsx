@@ -2,9 +2,16 @@
 
 export function ConnectionStatus({ connected }: { connected: boolean }) {
   return (
-    <div className="flex items-center gap-2 text-sm">
-      <div className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400' : 'bg-red-400'}`} />
-      <span className="text-gray-400">{connected ? 'Live' : 'Disconnected'}</span>
+    <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-surface-2 border border-subtle/30">
+      <div className="relative">
+        <div className={`w-2 h-2 rounded-full ${connected ? 'bg-bull' : 'bg-bear'}`} />
+        {connected && (
+          <div className="absolute inset-0 w-2 h-2 rounded-full bg-bull animate-pulse-glow" />
+        )}
+      </div>
+      <span className="text-xs font-mono font-medium tracking-wider uppercase text-muted">
+        {connected ? 'Live' : 'Offline'}
+      </span>
     </div>
   );
 }

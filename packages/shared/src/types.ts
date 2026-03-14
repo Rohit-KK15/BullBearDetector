@@ -54,6 +54,8 @@ export interface FeatureSnapshot {
   // composites
   direction: number;   // [-1, +1]
   conviction: number;  // [0, 1]
+  // price
+  markPrice: number;   // latest mark price from exchanges
   ts: number;
 }
 
@@ -77,6 +79,7 @@ export interface RegimeScore {
   asset: Asset;
   score: number;       // [-1, +1]
   label: RegimeLabel;
+  price: number;       // latest mark price
   direction: DirectionComponents;
   conviction: ConvictionFactors;
   ts: number;
@@ -99,6 +102,16 @@ export interface HistoryResponse {
   data: HistoryPoint[];
 }
 
+// ---- Regime transitions ----
+export interface RegimeTransition {
+  ts: number;
+  asset: Asset;
+  fromLabel: RegimeLabel;
+  toLabel: RegimeLabel;
+  score: number;
+  conviction: number;
+}
+
 // ---- WebSocket messages ----
 export interface WsSubscribeMessage {
   action: 'subscribe';
@@ -110,6 +123,7 @@ export interface WsRegimeUpdate {
   asset: Asset;
   score: number;
   label: RegimeLabel;
+  price: number;
   direction: DirectionComponents;
   conviction: ConvictionFactors;
   ts: number;

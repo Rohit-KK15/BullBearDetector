@@ -1,6 +1,6 @@
 import { createClient } from '@clickhouse/client';
 import type { ClickHouseClient } from '@clickhouse/client';
-import type { FeatureSnapshot, RegimeScore, Asset, HistoryPoint, RegimeLabel } from '@bull-bear/shared';
+import type { FeatureSnapshot, RegimeScore, Asset, HistoryPoint, RegimeLabel, RegimeTransition } from '@bull-bear/shared';
 import { REGIME_THRESHOLDS } from '@bull-bear/shared';
 import type { Interval } from '@bull-bear/shared';
 
@@ -171,4 +171,51 @@ export async function queryHistory(
       label: deriveLabel(avgScore),
     };
   });
+}
+
+interface TransitionRow {
+  ts: string;
+  asset: string;
+  label: string;
+  prev_label: string;
+  score: string | number;
+  conviction: string | number;
+}
+
+export async function queryRegimeTransitions(
+  client: ClickHouseClient,
+  asset: Asset,
+  hours: number = 24,
+): Promise<RegimeTransition[]> {
+  const query = `
+    SELECT ts, asset, label, prev_label, score, conviction
+    FROM (
+      SELECT
+        ts, asset, label, score, conviction,
+        lagInFrame(label) OVER (PARTITION BY asset ORDER BY ts) AS prev_label
+      FROM bullbear.regime_scores
+      WHERE asset = {asset:String}
+        AND ts >= now() - INTERVAL {hours:UInt32} HOUR
+    )
+    WHERE label != prev_label AND prev_label != ''
+    ORDER BY ts DESC
+    LIMIT 50
+  `;
+
+  const result = await client.query({
+    query,
+    query_params: { asset, hours },
+    format: 'JSONEachRow',
+  });
+
+  const rows = await result.json<TransitionRow>();
+
+  return rows.map((row) => ({
+    ts: new Date(row.ts.replace(' ', 'T') + 'Z').getTime(),
+    asset: row.asset as Asset,
+    fromLabel: row.prev_label as RegimeLabel,
+    toLabel: row.label as RegimeLabel,
+    score: typeof row.score === 'string' ? parseFloat(row.score) : row.score,
+    conviction: typeof row.conviction === 'string' ? parseFloat(row.conviction) : row.conviction,
+  }));
 }

@@ -11,6 +11,7 @@ function flattenRegimeScore(r: RegimeScore): Record<string, string | number> {
     asset: r.asset,
     score: r.score,
     label: r.label,
+    price: r.price,
     direction: r.direction.momentum + r.direction.flow + r.direction.depth + r.direction.funding,
     conviction: r.conviction.volConfidence * r.conviction.volumeConfidence * r.conviction.signalAgreement,
     momentumComp: r.direction.momentum,
@@ -37,6 +38,7 @@ function parseFeatureSnapshot(fields: Record<string, string>): FeatureSnapshot {
     volumeConfidence: parseFloat(fields.volumeConfidence),
     direction: parseFloat(fields.direction),
     conviction: parseFloat(fields.conviction),
+    markPrice: parseFloat(fields.markPrice || '0'),
     ts: parseFloat(fields.ts),
   };
 }

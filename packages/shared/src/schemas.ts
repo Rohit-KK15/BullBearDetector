@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ASSETS, VALID_INTERVALS } from './constants.js';
+import { ASSETS, VALID_INTERVALS } from './constants';
 
 export const AssetParam = z.enum(ASSETS as unknown as [string, ...string[]]);
 

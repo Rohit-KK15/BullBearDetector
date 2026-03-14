@@ -115,6 +115,7 @@ function computeFeatureSnapshot(asset: Asset, acc: AssetAccumulators): FeatureSn
     volumeConfidence,
     direction,
     conviction,
+    markPrice: acc.markPrice,
     ts: Date.now(),
   };
 }

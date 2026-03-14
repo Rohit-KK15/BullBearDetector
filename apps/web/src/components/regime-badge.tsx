@@ -2,16 +2,41 @@
 
 import type { RegimeLabel } from '@bull-bear/shared';
 
-const styles: Record<RegimeLabel, string> = {
-  bull: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-  neutral: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-  bear: 'bg-red-500/20 text-red-400 border-red-500/30',
+const config: Record<RegimeLabel, { bg: string; text: string; border: string; glow: string }> = {
+  bull: {
+    bg: 'bg-bull/10',
+    text: 'text-bull',
+    border: 'border-bull/20',
+    glow: 'shadow-[0_0_12px_-2px_rgba(0,232,123,0.3)]',
+  },
+  neutral: {
+    bg: 'bg-neutral/10',
+    text: 'text-neutral',
+    border: 'border-neutral/20',
+    glow: 'shadow-[0_0_12px_-2px_rgba(255,178,36,0.3)]',
+  },
+  bear: {
+    bg: 'bg-bear/10',
+    text: 'text-bear',
+    border: 'border-bear/20',
+    glow: 'shadow-[0_0_12px_-2px_rgba(255,59,92,0.3)]',
+  },
 };
 
-export function RegimeBadge({ label }: { label: RegimeLabel }) {
+export function RegimeBadge({ label, size = 'md' }: { label: RegimeLabel; size?: 'sm' | 'md' | 'lg' }) {
+  const s = config[label];
+  const sizeClasses = {
+    sm: 'px-2 py-0.5 text-[10px]',
+    md: 'px-3 py-1 text-xs',
+    lg: 'px-4 py-1.5 text-sm',
+  };
+
   return (
-    <span className={`px-3 py-1 rounded-full text-sm font-medium border ${styles[label]}`}>
-      {label.toUpperCase()}
+    <span className={`
+      inline-flex items-center rounded-md font-mono font-semibold tracking-widest uppercase
+      border ${s.bg} ${s.text} ${s.border} ${s.glow} ${sizeClasses[size]}
+    `}>
+      {label}
     </span>
   );
 }

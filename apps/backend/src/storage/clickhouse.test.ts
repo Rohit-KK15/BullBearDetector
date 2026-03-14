@@ -32,6 +32,7 @@ const sampleFeature: FeatureSnapshot = {
   volumeConfidence: 0.9,
   direction: 0.4,
   conviction: 0.7,
+  markPrice: 50000,
   ts: baseTs,
 };
 
@@ -39,6 +40,7 @@ const sampleRegime: RegimeScore = {
   asset: 'ETH',
   score: 0.45,
   label: 'bull',
+  price: 3200,
   direction: {
     momentum: 0.5,
     flow: -0.1,

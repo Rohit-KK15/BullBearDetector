@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS bullbear.features (
     conviction            Float64
 ) ENGINE = MergeTree()
 ORDER BY (asset, ts)
-TTL ts + INTERVAL 90 DAY;
+TTL toDateTime(ts) + INTERVAL 90 DAY;
 
 CREATE TABLE IF NOT EXISTS bullbear.regime_scores (
     ts                    DateTime64(3, 'UTC'),
@@ -31,4 +31,4 @@ CREATE TABLE IF NOT EXISTS bullbear.regime_scores (
     signal_agreement      Float64
 ) ENGINE = MergeTree()
 ORDER BY (asset, ts)
-TTL ts + INTERVAL 90 DAY;
+TTL toDateTime(ts) + INTERVAL 90 DAY;

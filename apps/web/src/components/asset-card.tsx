@@ -1,30 +1,93 @@
-'use client';
+"use client";
 
-import Link from 'next/link';
-import type { RegimeScore } from '@bull-bear/shared';
-import { RegimeBadge } from './regime-badge';
+import type { RegimeScore } from "@bull-bear/shared";
+import Link from "next/link";
+import { MiniDirectionBars } from "./mini-direction-bars";
+import { RegimeBadge } from "./regime-badge";
+import { ScoreDisplay } from "./score-display";
 
-const scoreColor = (score: number) =>
-  score > 0.3 ? 'text-emerald-400' : score < -0.3 ? 'text-red-400' : 'text-yellow-400';
+const glowClass = {
+	bull: "card-glow-bull hover:border-bull/30",
+	bear: "card-glow-bear hover:border-bear/30",
+	neutral: "card-glow-neutral hover:border-neutral/30",
+} as const;
 
-export function AssetCard({ regime }: { regime: RegimeScore }) {
-  return (
-    <Link href={`/asset/${regime.asset}`}>
-      <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 hover:border-gray-600 transition-colors">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold">{regime.asset}</h2>
-          <RegimeBadge label={regime.label} />
-        </div>
-        <div className={`text-4xl font-mono font-bold mb-4 ${scoreColor(regime.score)}`}>
-          {regime.score >= 0 ? '+' : ''}{regime.score.toFixed(3)}
-        </div>
-        <div className="grid grid-cols-2 gap-2 text-sm text-gray-400">
-          <div>Momentum: <span className="text-gray-200">{regime.direction.momentum.toFixed(3)}</span></div>
-          <div>Flow: <span className="text-gray-200">{regime.direction.flow.toFixed(3)}</span></div>
-          <div>Depth: <span className="text-gray-200">{regime.direction.depth.toFixed(3)}</span></div>
-          <div>Funding: <span className="text-gray-200">{regime.direction.funding.toFixed(3)}</span></div>
-        </div>
-      </div>
-    </Link>
-  );
+const icons: Record<string, string> = {
+	BTC: "₿",
+	ETH: "Ξ",
+	SOL: "◎",
+};
+
+function formatPrice(price: number): string {
+	if (price === 0) return "—";
+	if (price >= 1000)
+		return `$${price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+	if (price >= 1) return `$${price.toFixed(2)}`;
+	return `$${price.toFixed(4)}`;
+}
+
+export function AssetCard({
+	regime,
+	index,
+}: {
+	regime: RegimeScore;
+	index: number;
+}) {
+	return (
+		<Link href={`/asset/${regime.asset.toLowerCase()}`}>
+			<div
+				className={`
+        opacity-0 animate-slide-up stagger-${index + 1}
+        group relative bg-surface-1 border border-subtle/20 rounded-2xl p-6
+        transition-all duration-300 hover:bg-surface-2 hover:-translate-y-1
+        ${glowClass[regime.label]}
+      `}
+			>
+				{/* Header */}
+				<div className="flex items-center justify-between mb-4">
+					<div className="flex items-center gap-3">
+						<span className="text-2xl opacity-40 font-mono">
+							{icons[regime.asset] ?? "#"}
+						</span>
+						<div>
+							<h2 className="text-xl font-display font-semibold text-white tracking-tight">
+								{regime.asset}
+							</h2>
+							<span className="text-sm font-mono text-white/50 tabular-nums">
+								{formatPrice(regime.price)}
+							</span>
+						</div>
+					</div>
+					<RegimeBadge label={regime.label} size="sm" />
+				</div>
+
+				{/* Score */}
+				<div className="mb-5">
+					<ScoreDisplay score={regime.score} label={regime.label} size="lg" />
+				</div>
+
+				{/* Direction mini bars */}
+				<MiniDirectionBars direction={regime.direction} />
+
+				{/* Hover arrow */}
+				<div className="absolute top-6 right-6 opacity-0 group-hover:opacity-40 transition-opacity text-muted">
+					<svg
+						width="16"
+						height="16"
+						viewBox="0 0 16 16"
+						fill="none"
+						aria-hidden="true"
+					>
+						<path
+							d="M3 13L13 3M13 3H5M13 3V11"
+							stroke="currentColor"
+							strokeWidth="1.5"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+						/>
+					</svg>
+				</div>
+			</div>
+		</Link>
+	);
 }

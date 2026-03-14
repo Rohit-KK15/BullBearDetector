@@ -45,6 +45,7 @@ export function computeRegimeScore(features: FeatureSnapshot): RegimeScore {
     asset: features.asset,
     score,
     label,
+    price: features.markPrice,
     direction: dirComponents,
     conviction: convictionFactors,
     ts: features.ts,

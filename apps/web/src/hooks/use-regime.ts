@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import type { Asset, RegimeScore, WsRegimeUpdate, Interval } from '@bull-bear/shared';
 import { ASSETS } from '@bull-bear/shared';
-import { fetchAllRegimes, fetchRegime, fetchHistory } from '../lib/api';
+import { fetchAllRegimes, fetchRegime, fetchHistory, fetchTransitions } from '../lib/api';
 import { useRegimeWebSocket } from './use-websocket';
 
 export function useRegimeScores() {
@@ -21,15 +21,15 @@ export function useRegimeScores() {
       if (!old) return old;
       return old.map(r =>
         r.asset === update.asset
-          ? { ...r, score: update.score, label: update.label, direction: update.direction, conviction: update.conviction, ts: update.ts }
+          ? { ...r, score: update.score, label: update.label, price: update.price, direction: update.direction, conviction: update.conviction, ts: update.ts }
           : r
       );
     });
   }, [queryClient]);
 
-  const ws = useRegimeWebSocket(ASSETS, handleUpdate);
+  const { isConnected } = useRegimeWebSocket(ASSETS, handleUpdate);
 
-  return { ...query, isConnected: ws.isConnected };
+  return { ...query, isConnected };
 }
 
 export function useAssetRegime(asset: Asset) {
@@ -46,9 +46,9 @@ export function useAssetRegime(asset: Asset) {
     queryClient.invalidateQueries({ queryKey: ['regime', asset] });
   }, [queryClient, asset]);
 
-  useRegimeWebSocket([asset], handleUpdate);
+  const { isConnected } = useRegimeWebSocket([asset], handleUpdate);
 
-  return query;
+  return { ...query, isConnected };
 }
 
 export function useHistory(asset: Asset, interval: Interval) {
@@ -56,5 +56,13 @@ export function useHistory(asset: Asset, interval: Interval) {
     queryKey: ['history', asset, interval],
     queryFn: () => fetchHistory(asset, interval),
     refetchInterval: 30_000,
+  });
+}
+
+export function useTransitions(asset: Asset, hours: number = 24) {
+  return useQuery({
+    queryKey: ['transitions', asset, hours],
+    queryFn: () => fetchTransitions(asset, hours),
+    refetchInterval: 60_000,
   });
 }

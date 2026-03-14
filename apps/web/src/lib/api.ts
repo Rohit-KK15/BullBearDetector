@@ -1,30 +1,29 @@
-import type { Asset, RegimeScore, RegimeWithFeatures, FeatureSnapshot, HistoryResponse, Interval } from '@bull-bear/shared';
+import type { Asset, RegimeScore, RegimeWithFeatures, HistoryResponse, Interval, RegimeTransition } from '@bull-bear/shared';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL!;
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
-export async function fetchAllRegimes(): Promise<RegimeScore[]> {
-  const res = await fetch(`${API_URL}/api/regime`);
+async function apiFetch<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`);
+  if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
   const json = await res.json();
   return json.data;
+}
+
+export async function fetchAllRegimes(): Promise<RegimeScore[]> {
+  return apiFetch('/api/regime');
 }
 
 export async function fetchRegime(asset: Asset): Promise<RegimeWithFeatures> {
-  const res = await fetch(`${API_URL}/api/regime/${asset}`);
-  const json = await res.json();
-  return json.data;
-}
-
-export async function fetchFeatures(asset: Asset): Promise<FeatureSnapshot> {
-  const res = await fetch(`${API_URL}/api/features/${asset}`);
-  const json = await res.json();
-  return json.data;
+  return apiFetch(`/api/regime/${asset}`);
 }
 
 export async function fetchHistory(asset: Asset, interval: Interval = '1m', from?: number, to?: number): Promise<HistoryResponse> {
   const params = new URLSearchParams({ interval });
   if (from) params.set('from', String(from));
   if (to) params.set('to', String(to));
-  const res = await fetch(`${API_URL}/api/history/${asset}?${params}`);
-  const json = await res.json();
-  return json.data;
+  return apiFetch(`/api/history/${asset}?${params}`);
+}
+
+export async function fetchTransitions(asset: Asset, hours: number = 24): Promise<RegimeTransition[]> {
+  return apiFetch(`/api/transitions/${asset}?hours=${hours}`);
 }

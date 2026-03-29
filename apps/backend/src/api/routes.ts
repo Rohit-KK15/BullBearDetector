@@ -3,7 +3,7 @@ import type { Redis } from 'ioredis';
 import type { ClickHouseClient } from '@clickhouse/client';
 import { ASSETS, AssetParam, HistoryQuery, REDIS_STATE_KEYS, type Asset } from '@bull-bear/shared';
 import { getState } from '../storage/redis.js';
-import { queryHistory, queryRegimeTransitions } from '../storage/clickhouse.js';
+import { queryHistory, queryRegimeTransitions, queryPriceHistory } from '../storage/clickhouse.js';
 
 export function registerRoutes(app: FastifyInstance, redis: Redis, clickhouse: ClickHouseClient) {
   // GET /api/regime — all assets
@@ -77,5 +77,27 @@ export function registerRoutes(app: FastifyInstance, redis: Redis, clickhouse: C
     );
 
     return { data };
+  });
+
+  // GET /api/prices/:asset — OHLC price history
+  app.get('/api/prices/:asset', async (req, reply) => {
+    const { asset } = req.params as { asset: string };
+    const parsed = AssetParam.safeParse(asset.toUpperCase());
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid asset' });
+
+    const query = HistoryQuery.safeParse(req.query);
+    if (!query.success) return reply.status(400).send({ error: 'Invalid query params' });
+
+    const { from, to, interval } = query.data;
+    const now = Date.now();
+    const data = await queryPriceHistory(
+      clickhouse,
+      parsed.data as Asset,
+      from ?? now - 3600_000,
+      to ?? now,
+      interval,
+    );
+
+    return { data: { asset: parsed.data, interval, data } };
   });
 }

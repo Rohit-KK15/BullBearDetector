@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS bullbear.regime_scores (
     conviction            Float64,
     vol_confidence        Float64,
     volume_confidence     Float64,
-    signal_agreement      Float64
+    signal_agreement      Float64,
+    price                 Float64 DEFAULT 0
 ) ENGINE = MergeTree()
 ORDER BY (asset, ts)
 TTL toDateTime(ts) + INTERVAL 90 DAY;

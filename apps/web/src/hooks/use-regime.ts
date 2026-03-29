@@ -2,10 +2,20 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
-import type { Asset, RegimeScore, WsRegimeUpdate, Interval } from '@bull-bear/shared';
+import type { Asset, RegimeScore, RegimeWithFeatures, WsRegimeUpdate, Interval } from '@bull-bear/shared';
 import { ASSETS } from '@bull-bear/shared';
-import { fetchAllRegimes, fetchRegime, fetchHistory, fetchTransitions } from '../lib/api';
+import { fetchAllRegimes, fetchRegime, fetchHistory, fetchTransitions, fetchPriceHistory } from '../lib/api';
 import { useRegimeWebSocket } from './use-websocket';
+
+// Query a large window per interval so the chart is always full
+const INTERVAL_LOOKBACK: Record<Interval, number> = {
+  '5s':  60 * 60_000,          // 1 hr
+  '1m':  24 * 3600_000,        // 24 hrs
+  '5m':  3 * 86400_000,        // 3 days
+  '15m': 7 * 86400_000,        // 7 days
+  '1h':  30 * 86400_000,       // 30 days
+  '1d':  90 * 86400_000,       // 90 days
+};
 
 export function useRegimeScores() {
   const queryClient = useQueryClient();
@@ -43,7 +53,18 @@ export function useAssetRegime(asset: Asset) {
 
   const handleUpdate = useCallback((update: WsRegimeUpdate) => {
     if (update.asset !== asset) return;
-    queryClient.invalidateQueries({ queryKey: ['regime', asset] });
+    queryClient.setQueryData<RegimeWithFeatures>(['regime', asset], (old) => {
+      if (!old) return old;
+      return {
+        ...old,
+        score: update.score,
+        label: update.label,
+        price: update.price,
+        direction: update.direction,
+        conviction: update.conviction,
+        ts: update.ts,
+      };
+    });
   }, [queryClient, asset]);
 
   const { isConnected } = useRegimeWebSocket([asset], handleUpdate);
@@ -52,9 +73,19 @@ export function useAssetRegime(asset: Asset) {
 }
 
 export function useHistory(asset: Asset, interval: Interval) {
+  const from = Date.now() - INTERVAL_LOOKBACK[interval];
   return useQuery({
     queryKey: ['history', asset, interval],
-    queryFn: () => fetchHistory(asset, interval),
+    queryFn: () => fetchHistory(asset, interval, from, Date.now()),
+    refetchInterval: 30_000,
+  });
+}
+
+export function usePriceHistory(asset: Asset, interval: Interval) {
+  const from = Date.now() - INTERVAL_LOOKBACK[interval];
+  return useQuery({
+    queryKey: ['priceHistory', asset, interval],
+    queryFn: () => fetchPriceHistory(asset, interval, from, Date.now()),
     refetchInterval: 30_000,
   });
 }

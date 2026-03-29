@@ -66,6 +66,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@bull-bear/engine':
+        specifier: workspace:*
+        version: link:../../packages/engine
       '@bull-bear/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -106,6 +109,19 @@ importers:
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
+
+  packages/engine:
+    dependencies:
+      '@bull-bear/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@25.5.0)
 
   packages/shared:
     dependencies:

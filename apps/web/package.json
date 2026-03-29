@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@bull-bear/engine": "workspace:*",
     "@bull-bear/shared": "workspace:*",
     "@tanstack/react-query": "^5.60.0",
     "lightweight-charts": "^4.2.0",

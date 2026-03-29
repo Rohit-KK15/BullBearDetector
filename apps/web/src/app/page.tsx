@@ -4,9 +4,10 @@ import { useRegimeScores } from '@/hooks/use-regime';
 import { AssetCard } from '@/components/asset-card';
 import { ConnectionStatus } from '@/components/connection-status';
 import { CardSkeleton } from '@/components/skeleton';
+import { ErrorState } from '@/components/error-state';
 
 export default function Home() {
-  const { data: regimes, isLoading, isConnected } = useRegimeScores();
+  const { data: regimes, isLoading, isError, isConnected } = useRegimeScores();
 
   return (
     <main className="min-h-screen px-6 py-10 max-w-5xl mx-auto">
@@ -31,6 +32,8 @@ export default function Home() {
           <CardSkeleton />
           <CardSkeleton />
         </div>
+      ) : isError ? (
+        <ErrorState />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {(regimes ?? []).map((regime, i) => (

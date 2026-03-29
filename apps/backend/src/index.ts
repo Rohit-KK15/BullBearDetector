@@ -8,17 +8,24 @@ import { createServer } from './api/index.js';
 import { setupWebSocket } from './api/ws.js';
 
 async function main() {
-  const redis = createRedisClient(config.redis.url);
+  // Separate Redis clients to prevent XREADGROUP BLOCK from stalling API reads.
+  // Each blocking consumer loop needs its own connection; API/WS reads share a non-blocking one.
+  const redisIngestion = createRedisClient(config.redis.url);
+  const redisFeatures = createRedisClient(config.redis.url);
+  const redisRegime = createRedisClient(config.redis.url);
+  const redisApi = createRedisClient(config.redis.url);
+  const redisWs = createRedisClient(config.redis.url);
+
   const clickhouse = createClickHouseClient(config.clickhouse);
 
-  // Start pipeline modules
-  await startIngestion(redis, config);
-  await startFeatureEngine(redis);
-  await startRegimeEngine(redis, clickhouse);
+  // Start pipeline modules (each with its own blocking Redis connection)
+  await startIngestion(redisIngestion, config);
+  await startFeatureEngine(redisFeatures);
+  await startRegimeEngine(redisRegime, clickhouse);
 
-  // Start API server
-  const app = await createServer(redis, clickhouse);
-  await setupWebSocket(app, redis);
+  // Start API server (non-blocking Redis connection)
+  const app = await createServer(redisApi, clickhouse);
+  await setupWebSocket(app, redisWs);
   await app.listen({ port: config.port, host: config.host });
 
   console.log(`BullBearDetector running on http://${config.host}:${config.port}`);

@@ -2,7 +2,11 @@
 
 export function ConnectionStatus({ connected }: { connected: boolean }) {
   return (
-    <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-surface-2 border border-subtle/30">
+    <div
+      role="status"
+      aria-label={connected ? 'Live connection' : 'Disconnected'}
+      className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-surface-2 border border-subtle/30"
+    >
       <div className="relative">
         <div className={`w-2 h-2 rounded-full ${connected ? 'bg-bull' : 'bg-bear'}`} />
         {connected && (

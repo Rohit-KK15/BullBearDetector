@@ -1,6 +1,6 @@
-import { rollingZScore, clampedZScore, ema, rollingPercentileRank, stddev, safeRatio } from './math.js';
+import { clampedZScore, ema, rollingPercentileRank, stddev, safeRatio } from './math.js';
 import {
-  MOMENTUM_WEIGHTS, ZSCORE_WINDOW, ZSCORE_CLAMP, OFI_WINDOW_MS,
+  MOMENTUM_WEIGHTS, ZSCORE_CLAMP, OFI_WINDOW_MS,
   DEPTH_LEVELS, FUNDING_SCALING_FACTOR, VOL_SAMPLES, VOL_PERCENTILE_WINDOW,
   VOLUME_EMA_PERIODS, VOL_CONFIDENCE, VOLUME_CONFIDENCE,
   type Trade, type DepthSnapshot, type FundingUpdate, type Exchange,
@@ -9,16 +9,19 @@ import {
 // ---- MomentumAccumulator ----
 
 export class MomentumAccumulator {
+  private static readonly MAX_PRICES = 180; // 15m at 5s ticks
   private prices: number[] = [];
 
   addPrice(price: number): void {
     this.prices.push(price);
+    if (this.prices.length > MomentumAccumulator.MAX_PRICES) {
+      this.prices.shift();
+    }
   }
 
   compute(): number {
     if (this.prices.length < 2) return 0;
 
-    // Timeframe sample counts (5s ticks)
     const SAMPLES_1M = 12;
     const SAMPLES_5M = 60;
     const SAMPLES_15M = 180;
@@ -35,27 +38,6 @@ export class MomentumAccumulator {
       r15m: SAMPLES_15M,
     };
 
-    // Determine available terms (need at least 2 samples for z-score)
-    const availableTerms: Record<string, number> = {};
-    for (const [key, count] of Object.entries(sampleCounts)) {
-      if (this.prices.length >= 2 && this.prices.length >= Math.min(count, 2)) {
-        availableTerms[key] = weights[key];
-      }
-    }
-
-    // Filter to terms where we have enough samples for meaningful z-score
-    const filteredTerms: Record<string, number> = {};
-    for (const [key, count] of Object.entries(sampleCounts)) {
-      if (this.prices.length >= count) {
-        filteredTerms[key] = weights[key];
-      } else if (this.prices.length >= 2) {
-        // Still include but only if we have at least 2 samples
-        filteredTerms[key] = weights[key];
-      }
-    }
-
-    // Cold start weight redistribution: only include terms with enough samples
-    // A term is "available" if we have enough samples for its window
     const termsWithSamples: Record<string, number> = {};
     for (const [key, count] of Object.entries(sampleCounts)) {
       if (this.prices.length >= count) {
@@ -63,11 +45,8 @@ export class MomentumAccumulator {
       }
     }
 
-    // If we don't have enough for any full window, use what we have with just r1m
-    // available as long as we have >= 2 prices
     let activeTerms: Record<string, number>;
     if (Object.keys(termsWithSamples).length === 0) {
-      // Cold start: only r1m is "available" (use what we have)
       activeTerms = { r1m: weights.r1m };
     } else {
       activeTerms = termsWithSamples;
@@ -97,26 +76,19 @@ export class OrderFlowAccumulator {
 
   addTrade(trade: Trade): void {
     this.trades.push(trade);
-    // Prune trades older than OFI_WINDOW_MS
     const cutoff = trade.ts - OFI_WINDOW_MS;
     this.trades = this.trades.filter(t => t.ts >= cutoff);
   }
 
   compute(): number {
     if (this.trades.length === 0) return 0;
-
     let buyVol = 0;
     let sellVol = 0;
-
     for (const trade of this.trades) {
       const dollarVol = trade.price * trade.qty;
-      if (trade.side === 'buy') {
-        buyVol += dollarVol;
-      } else {
-        sellVol += dollarVol;
-      }
+      if (trade.side === 'buy') buyVol += dollarVol;
+      else sellVol += dollarVol;
     }
-
     return safeRatio(buyVol, sellVol);
   }
 }
@@ -132,23 +104,16 @@ export class DepthAccumulator {
 
   compute(): number {
     if (this.snapshots.size === 0) return 0;
-
-    // Aggregate bid/ask quantities across all exchanges, then compute a single imbalance
     let totalWeightedBidQty = 0;
     let totalWeightedAskQty = 0;
-
     for (const snapshot of this.snapshots.values()) {
-      const levels = DEPTH_LEVELS;
-
-      for (let i = 0; i < Math.min(snapshot.bids.length, levels); i++) {
+      for (let i = 0; i < Math.min(snapshot.bids.length, DEPTH_LEVELS); i++) {
         totalWeightedBidQty += snapshot.bids[i].qty * (1 / (i + 1));
       }
-
-      for (let i = 0; i < Math.min(snapshot.asks.length, levels); i++) {
+      for (let i = 0; i < Math.min(snapshot.asks.length, DEPTH_LEVELS); i++) {
         totalWeightedAskQty += snapshot.asks[i].qty * (1 / (i + 1));
       }
     }
-
     return safeRatio(totalWeightedBidQty, totalWeightedAskQty);
   }
 }
@@ -164,10 +129,8 @@ export class FundingAccumulator {
 
   compute(): number {
     if (this.rates.size === 0) return 0;
-
     const values = Array.from(this.rates.values());
     const avgRate = values.reduce((a, b) => a + b, 0) / values.length;
-
     return Math.max(-1, Math.min(1, avgRate / FUNDING_SCALING_FACTOR));
   }
 }
@@ -180,17 +143,11 @@ export class VolatilityAccumulator {
 
   addReturn(logReturn: number): void {
     this.recentReturns.push(logReturn);
-    if (this.recentReturns.length > VOL_SAMPLES) {
-      this.recentReturns.shift();
-    }
-
-    // Compute current realized vol and push to history
+    if (this.recentReturns.length > VOL_SAMPLES) this.recentReturns.shift();
     if (this.recentReturns.length >= 2) {
       const currentVol = stddev(this.recentReturns);
       this.volHistory.push(currentVol);
-      if (this.volHistory.length > VOL_PERCENTILE_WINDOW) {
-        this.volHistory.shift();
-      }
+      if (this.volHistory.length > VOL_PERCENTILE_WINDOW) this.volHistory.shift();
     }
   }
 
@@ -198,18 +155,15 @@ export class VolatilityAccumulator {
     if (this.recentReturns.length < 2) {
       return { realizedVol: 0, volPercentile: 0.5, volConfidence: 1.0 };
     }
-
     const realizedVol = stddev(this.recentReturns);
     const volPercentile = rollingPercentileRank(realizedVol, this.volHistory);
 
     // Smooth interpolation instead of hard step function
     let volConfidence: number;
     if (volPercentile < VOL_CONFIDENCE.deadEnd) {
-      // Ramp from deadFloor → normalValue across [0, deadEnd]
       const t = volPercentile / VOL_CONFIDENCE.deadEnd;
       volConfidence = VOL_CONFIDENCE.deadFloor + t * (VOL_CONFIDENCE.normalValue - VOL_CONFIDENCE.deadFloor);
     } else if (volPercentile > VOL_CONFIDENCE.chaoticStart) {
-      // Ramp from normalValue → chaoticFloor across [chaoticStart, 1.0]
       const t = (volPercentile - VOL_CONFIDENCE.chaoticStart) / (1.0 - VOL_CONFIDENCE.chaoticStart);
       volConfidence = VOL_CONFIDENCE.normalValue - t * (VOL_CONFIDENCE.normalValue - VOL_CONFIDENCE.chaoticFloor);
     } else {
@@ -241,11 +195,9 @@ export class VolumeAccumulator {
     if (!this.hasHistory || this.emaVolume === 0) {
       return { volumeRatio: 1, volumeConfidence: 0.65 };
     }
-
     const volumeRatio = this.currentBucketVolume / this.emaVolume;
     const { floor, ceiling, maxRatio } = VOLUME_CONFIDENCE;
     const volumeConfidence = floor + (ceiling - floor) * Math.min(volumeRatio / maxRatio, 1);
-
     return { volumeRatio, volumeConfidence };
   }
 }

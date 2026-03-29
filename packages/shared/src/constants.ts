@@ -19,11 +19,18 @@ export const DIRECTION_WEIGHTS = {
 } as const;
 
 export const REGIME_THRESHOLDS = {
-  bull: 0.3,
-  bear: -0.3,
+  bull: 0.4,
+  bear: -0.4,
 } as const;
 
-export const SCORE_SCALING_FACTOR = 1.5;
+// Hysteresis: once in bull/bear, score must cross back past the exit threshold to return to neutral.
+// This prevents rapid flipping on small oscillations around the boundary.
+export const REGIME_EXIT_THRESHOLDS = {
+  bull: 0.25,   // must drop below 0.25 to exit bull → neutral
+  bear: -0.25,  // must rise above -0.25 to exit bear → neutral
+} as const;
+
+export const SCORE_SCALING_FACTOR = 1.0;
 
 // ---- Signal parameters ----
 export const MOMENTUM_WEIGHTS = {
@@ -40,12 +47,16 @@ export const FUNDING_SCALING_FACTOR = 0.0003;
 export const DEPTH_LEVELS = 10;
 
 // ---- Conviction parameters ----
+// Vol confidence uses smooth interpolation instead of hard steps.
+// Dead zone (low vol): confidence ramps from 0.4 at percentile 0 to 1.0 at percentile 0.3
+// Normal zone: 1.0
+// Chaotic zone (high vol): confidence ramps from 1.0 at percentile 0.7 to 0.5 at percentile 1.0
 export const VOL_CONFIDENCE = {
-  deadThreshold: 0.2,
-  chaoticThreshold: 0.8,
-  deadValue: 0.5,
+  deadEnd: 0.3,       // below this percentile, confidence is reduced (was hard cutoff at 0.2)
+  chaoticStart: 0.7,  // above this percentile, confidence is reduced (was hard cutoff at 0.8)
+  deadFloor: 0.4,     // minimum confidence in dead zone
+  chaoticFloor: 0.5,  // minimum confidence in chaotic zone
   normalValue: 1.0,
-  chaoticValue: 0.6,
 } as const;
 
 export const VOLUME_CONFIDENCE = {
@@ -55,9 +66,13 @@ export const VOLUME_CONFIDENCE = {
 } as const;
 
 export const SIGNAL_AGREEMENT = {
-  floor: 0.5,
-  range: 0.5,
+  floor: 0.15,
+  range: 0.85,
 } as const;
+
+// Minimum number of price samples (5s ticks) before issuing non-neutral labels.
+// 36 ticks = 3 minutes of data — enough for momentum to warm up across the 1m window.
+export const MIN_WARM_UP_TICKS = 36;
 
 // ---- Timing ----
 export const TICK_INTERVAL_MS = 5_000;

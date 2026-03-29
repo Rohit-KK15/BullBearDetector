@@ -22,13 +22,21 @@ const areaTopColors = {
   neutral: 'rgba(255, 178, 36, 0.15)',
 };
 
-export function RegimeChart({ data, label, height = 320 }: RegimeChartProps) {
+const tzOffsetSec = new Date().getTimezoneOffset() * -60;
+function toLocalTime(tsMs: number): Time {
+  return (Math.floor(tsMs / 1000) + tzOffsetSec) as unknown as Time;
+}
+
+export function RegimeChart({ data, label, height = 280 }: RegimeChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Area'> | null>(null);
+  const fittedRef = useRef(false);
 
+  // Create chart once
   useEffect(() => {
     if (!containerRef.current) return;
+    fittedRef.current = false;
 
     const chart = createChart(containerRef.current, {
       height,
@@ -50,7 +58,11 @@ export function RegimeChart({ data, label, height = 320 }: RegimeChartProps) {
         borderColor: 'rgba(58, 68, 85, 0.3)',
         timeVisible: true,
         secondsVisible: false,
+        lockVisibleTimeRangeOnResize: true,
+        rightOffset: 3,
       },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true },
+      handleScale: { mouseWheel: true, pinch: true },
       crosshair: {
         vertLine: { color: 'rgba(90, 101, 120, 0.3)', width: 1, style: 3 },
         horzLine: { color: 'rgba(90, 101, 120, 0.3)', width: 1, style: 3 },
@@ -58,23 +70,17 @@ export function RegimeChart({ data, label, height = 320 }: RegimeChartProps) {
     });
 
     const series = chart.addAreaSeries({
-      lineColor: lineColors[label],
+      lineColor: lineColors.neutral,
       lineWidth: 2,
-      topColor: areaTopColors[label],
+      topColor: areaTopColors.neutral,
       bottomColor: 'transparent',
-      crosshairMarkerBackgroundColor: lineColors[label],
+      crosshairMarkerBackgroundColor: lineColors.neutral,
       crosshairMarkerBorderColor: '#06080a',
       crosshairMarkerBorderWidth: 2,
       crosshairMarkerRadius: 4,
+      lastValueVisible: true,
+      priceLineVisible: true,
     });
-
-    if (data.length > 0) {
-      const chartData: LineData[] = data.map(d => ({
-        time: Math.floor(d.ts / 1000) as unknown as Time,
-        value: d.score,
-      }));
-      series.setData(chartData);
-    }
 
     chartRef.current = chart;
     seriesRef.current = series;
@@ -88,8 +94,37 @@ export function RegimeChart({ data, label, height = 320 }: RegimeChartProps) {
     return () => {
       window.removeEventListener('resize', handleResize);
       chart.remove();
+      chartRef.current = null;
+      seriesRef.current = null;
     };
-  }, [data, label, height]);
+  }, [height]);
+
+  // Update colors when label changes
+  useEffect(() => {
+    if (!seriesRef.current) return;
+    seriesRef.current.applyOptions({
+      lineColor: lineColors[label],
+      topColor: areaTopColors[label],
+      crosshairMarkerBackgroundColor: lineColors[label],
+    });
+  }, [label]);
+
+  // Update data
+  useEffect(() => {
+    if (!seriesRef.current || !chartRef.current || data.length === 0) return;
+
+    const chartData: LineData[] = data.map(d => ({
+      time: toLocalTime(d.ts),
+      value: d.score,
+    }));
+    seriesRef.current.setData(chartData);
+
+    // Only fit on first load — don't reset user's scroll/zoom on refetch
+    if (!fittedRef.current) {
+      chartRef.current.timeScale().fitContent();
+      fittedRef.current = true;
+    }
+  }, [data]);
 
   return (
     <div className="bg-surface-1 border border-subtle/20 rounded-2xl p-5 opacity-0 animate-fade-in stagger-2">
@@ -97,7 +132,7 @@ export function RegimeChart({ data, label, height = 320 }: RegimeChartProps) {
         <h3 className="text-sm font-display font-semibold text-muted uppercase tracking-wider">Score History</h3>
         <span className="text-[10px] font-mono text-muted">{data.length} points</span>
       </div>
-      <div ref={containerRef} className="w-full rounded-lg overflow-hidden" />
+      <div ref={containerRef} className="w-full rounded-lg overflow-hidden" role="img" aria-label="Regime score history chart" />
     </div>
   );
 }

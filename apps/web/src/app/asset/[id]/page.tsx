@@ -4,9 +4,10 @@ import { use, useState } from 'react';
 import Link from 'next/link';
 import type { Asset, Interval } from '@bull-bear/shared';
 import { VALID_INTERVALS } from '@bull-bear/shared';
-import { useAssetRegime, useHistory, useTransitions } from '@/hooks/use-regime';
+import { useAssetRegime, useHistory, usePriceHistory, useTransitions } from '@/hooks/use-regime';
 import { RegimeBadge } from '@/components/regime-badge';
 import { RegimeChart } from '@/components/regime-chart';
+import { PriceChart } from '@/components/price-chart';
 import { DirectionBreakdown } from '@/components/direction-breakdown';
 import { ConvictionGauges } from '@/components/conviction-gauges';
 import { FeatureSignals } from '@/components/feature-signals';
@@ -14,6 +15,7 @@ import { ScoreDisplay } from '@/components/score-display';
 import { ConnectionStatus } from '@/components/connection-status';
 import { RegimeTimeline } from '@/components/regime-timeline';
 import { DetailSkeleton } from '@/components/skeleton';
+import { ErrorState } from '@/components/error-state';
 
 const icons: Record<string, string> = {
   BTC: '₿',
@@ -33,19 +35,27 @@ export default function AssetPage({ params }: { params: Promise<{ id: string }> 
   const asset = id.toUpperCase() as Asset;
   const [interval, setInterval] = useState<Interval>('1m');
 
-  const { data: regime, isLoading, isConnected } = useAssetRegime(asset);
-  const { data: history } = useHistory(asset, interval);
-  const { data: transitions } = useTransitions(asset);
+  const { data: regime, isLoading, isError, isConnected } = useAssetRegime(asset);
+  const { data: history, isLoading: historyLoading } = useHistory(asset, interval);
+  const { data: priceHistory, isLoading: priceLoading } = usePriceHistory(asset, interval);
+  const { data: transitions, isLoading: transitionsLoading } = useTransitions(asset);
+
+  const directionSum = regime
+    ? regime.direction.momentum + regime.direction.flow + regime.direction.depth + regime.direction.funding
+    : 0;
+  const avgConviction = regime
+    ? (regime.conviction.volConfidence + regime.conviction.volumeConfidence + regime.conviction.signalAgreement) / 3
+    : 0;
 
   return (
-    <main className="min-h-screen px-6 py-10 max-w-5xl mx-auto">
+    <main className="min-h-screen px-4 sm:px-6 py-10 max-w-5xl mx-auto">
       {/* Top nav */}
       <div className="flex items-center justify-between mb-8 opacity-0 animate-fade-in">
         <Link
           href="/"
           className="flex items-center gap-2 text-sm text-muted hover:text-white/80 transition-colors font-body group"
         >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="transition-transform group-hover:-translate-x-0.5">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" className="transition-transform group-hover:-translate-x-0.5">
             <path d="M10 12L6 8L10 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
           Overview
@@ -55,6 +65,8 @@ export default function AssetPage({ params }: { params: Promise<{ id: string }> 
 
       {isLoading ? (
         <DetailSkeleton />
+      ) : isError ? (
+        <ErrorState message={`Could not load data for ${asset}`} />
       ) : !regime ? (
         <div className="flex flex-col items-center justify-center py-20 opacity-0 animate-fade-in">
           <div className="text-4xl mb-4 opacity-30">?</div>
@@ -62,12 +74,12 @@ export default function AssetPage({ params }: { params: Promise<{ id: string }> 
         </div>
       ) : (
         <>
-          {/* Asset header */}
-          <div className="flex items-center gap-4 mb-3 opacity-0 animate-slide-up">
-            <span className="text-4xl opacity-30 font-mono">{icons[asset] ?? '#'}</span>
+          {/* Asset header — responsive */}
+          <div className="flex flex-wrap items-center gap-3 sm:gap-4 mb-3 opacity-0 animate-slide-up">
+            <span className="text-3xl sm:text-4xl opacity-30 font-mono">{icons[asset] ?? '#'}</span>
             <div>
-              <h1 className="text-3xl font-display font-bold text-white tracking-tight">{asset}</h1>
-              <span className="text-lg font-mono text-white/50 tabular-nums">{formatPrice(regime.price)}</span>
+              <h1 className="text-2xl sm:text-3xl font-display font-bold text-white tracking-tight">{asset}</h1>
+              <span className="text-base sm:text-lg font-mono text-white/50 tabular-nums">{formatPrice(regime.price)}</span>
             </div>
             <RegimeBadge label={regime.label} size="lg" />
             <div className="ml-auto">
@@ -75,26 +87,22 @@ export default function AssetPage({ params }: { params: Promise<{ id: string }> 
             </div>
           </div>
 
-          {/* Composite scores bar */}
-          <div className="flex items-center gap-6 mb-8 opacity-0 animate-fade-in stagger-1">
+          {/* Composite scores bar — responsive */}
+          <div className="flex flex-wrap items-center gap-3 sm:gap-6 mb-8 opacity-0 animate-fade-in stagger-1">
             <div className="flex items-center gap-2">
               <span className="text-xs font-mono text-muted uppercase tracking-wider">Direction</span>
-              <span className={`text-sm font-mono font-semibold tabular-nums ${
-                regime.direction.momentum + regime.direction.flow + regime.direction.depth + regime.direction.funding >= 0
-                  ? 'text-bull/80' : 'text-bear/80'
-              }`}>
-                {(regime.direction.momentum + regime.direction.flow + regime.direction.depth + regime.direction.funding) >= 0 ? '+' : ''}
-                {(regime.direction.momentum + regime.direction.flow + regime.direction.depth + regime.direction.funding).toFixed(3)}
+              <span className={`text-sm font-mono font-semibold tabular-nums ${directionSum >= 0 ? 'text-bull/80' : 'text-bear/80'}`}>
+                {directionSum >= 0 ? '+' : ''}{directionSum.toFixed(3)}
               </span>
             </div>
-            <div className="w-px h-4 bg-subtle/30" />
+            <div className="w-px h-4 bg-subtle/30 hidden sm:block" />
             <div className="flex items-center gap-2">
               <span className="text-xs font-mono text-muted uppercase tracking-wider">Conviction</span>
               <span className="text-sm font-mono font-semibold tabular-nums text-white/70">
-                {((regime.conviction.volConfidence + regime.conviction.volumeConfidence + regime.conviction.signalAgreement) / 3 * 100).toFixed(0)}%
+                {(avgConviction * 100).toFixed(0)}%
               </span>
             </div>
-            <div className="w-px h-4 bg-subtle/30" />
+            <div className="w-px h-4 bg-subtle/30 hidden sm:block" />
             <div className="flex items-center gap-2">
               <span className="text-xs font-mono text-muted uppercase tracking-wider">Updated</span>
               <span className="text-sm font-mono text-white/50">
@@ -103,13 +111,14 @@ export default function AssetPage({ params }: { params: Promise<{ id: string }> 
             </div>
           </div>
 
-          {/* Interval selector + chart */}
+          {/* Interval selector — responsive with wrapping */}
           <div className="opacity-0 animate-fade-in stagger-2">
-            <div className="flex items-center gap-1.5 mb-4">
+            <div className="flex flex-wrap items-center gap-1.5 mb-4">
               {VALID_INTERVALS.map(i => (
                 <button
                   key={i}
                   onClick={() => setInterval(i)}
+                  aria-pressed={interval === i}
                   className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-all duration-200 ${
                     interval === i
                       ? 'bg-surface-3 text-white border border-subtle/30'
@@ -120,7 +129,22 @@ export default function AssetPage({ params }: { params: Promise<{ id: string }> 
                 </button>
               ))}
             </div>
-            {history && <RegimeChart data={history.data} label={regime.label} />}
+
+            {/* Score chart */}
+            {historyLoading ? (
+              <div className="h-72 bg-surface-1 border border-subtle/20 rounded-2xl animate-pulse" />
+            ) : history ? (
+              <RegimeChart data={history.data} label={regime.label} />
+            ) : null}
+
+            {/* Price chart */}
+            <div className="mt-4">
+              {priceLoading ? (
+                <div className="h-60 bg-surface-1 border border-subtle/20 rounded-2xl animate-pulse" />
+              ) : priceHistory && priceHistory.data.length > 0 ? (
+                <PriceChart data={priceHistory.data} label={regime.label} />
+              ) : null}
+            </div>
           </div>
 
           {/* Breakdowns - 3 column */}
@@ -132,7 +156,11 @@ export default function AssetPage({ params }: { params: Promise<{ id: string }> 
 
           {/* Regime transition history */}
           <div className="mt-6 opacity-0 animate-fade-in stagger-4">
-            <RegimeTimeline transitions={transitions ?? []} />
+            {transitionsLoading ? (
+              <div className="h-48 bg-surface-1 border border-subtle/20 rounded-2xl animate-pulse" />
+            ) : (
+              <RegimeTimeline transitions={transitions ?? []} />
+            )}
           </div>
         </>
       )}

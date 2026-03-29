@@ -179,14 +179,14 @@ describe('queryHistory', () => {
   });
 
   it('handles numeric avg_score (not string)', async () => {
-    const mockRow = { bucket_ts: '2023-11-14 22:13:20', avg_score: 0.35 };
+    const mockRow = { bucket_ts: '2023-11-14 22:13:20', avg_score: 0.5 };
     const { query, queryMock } = makeClient();
     queryMock.mockResolvedValue({ json: vi.fn().mockResolvedValue([mockRow]) });
 
     const results = await queryHistory({ query } as any, 'BTC', baseTs - 60000, baseTs, '1h');
 
     expect(results[0].label).toBe('bull');
-    expect(results[0].score).toBeCloseTo(0.35);
+    expect(results[0].score).toBeCloseTo(0.5);
   });
 
   it('returns empty array when no rows are returned', async () => {

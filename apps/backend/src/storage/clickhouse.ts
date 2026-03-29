@@ -40,6 +40,7 @@ interface RegimeScoreRow {
   vol_confidence: number;
   volume_confidence: number;
   signal_agreement: number;
+  price: number;
 }
 
 /**
@@ -96,6 +97,7 @@ export async function insertRegimeScores(
     vol_confidence: r.conviction.volConfidence,
     volume_confidence: r.conviction.volumeConfidence,
     signal_agreement: r.conviction.signalAgreement,
+    price: r.price,
   }));
 
   await client.insert({
@@ -218,4 +220,64 @@ export async function queryRegimeTransitions(
     score: typeof row.score === 'string' ? parseFloat(row.score) : row.score,
     conviction: typeof row.conviction === 'string' ? parseFloat(row.conviction) : row.conviction,
   }));
+}
+
+interface PriceHistoryRow {
+  bucket_ts: string;
+  avg_price: string | number;
+  min_price: string | number;
+  max_price: string | number;
+}
+
+export interface PricePoint {
+  ts: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+export async function queryPriceHistory(
+  client: ClickHouseClient,
+  asset: Asset,
+  from: number,
+  to: number,
+  interval: Interval,
+): Promise<PricePoint[]> {
+  const fromTs = new Date(from).toISOString().replace('T', ' ').replace('Z', '');
+  const toTs = new Date(to).toISOString().replace('T', ' ').replace('Z', '');
+  const chInterval = INTERVAL_MAP[interval];
+
+  const query = `
+    SELECT
+      toStartOfInterval(ts, INTERVAL ${chInterval}) as bucket_ts,
+      argMin(price, ts) as open_price,
+      max(price) as max_price,
+      min(price) as min_price,
+      argMax(price, ts) as close_price
+    FROM bullbear.regime_scores
+    WHERE asset = {asset:String} AND ts >= {from_ts:String} AND ts <= {to_ts:String}
+      AND price > 0
+    GROUP BY bucket_ts
+    ORDER BY bucket_ts
+  `;
+
+  const result = await client.query({
+    query,
+    query_params: { asset, from_ts: fromTs, to_ts: toTs },
+    format: 'JSONEachRow',
+  });
+
+  const rows = await result.json<{ bucket_ts: string; open_price: string | number; max_price: string | number; min_price: string | number; close_price: string | number }>();
+
+  return rows.map((row) => {
+    const bucketTs = new Date(row.bucket_ts.replace(' ', 'T') + 'Z').getTime();
+    return {
+      ts: bucketTs,
+      open: typeof row.open_price === 'string' ? parseFloat(row.open_price) : row.open_price,
+      high: typeof row.max_price === 'string' ? parseFloat(row.max_price) : row.max_price,
+      low: typeof row.min_price === 'string' ? parseFloat(row.min_price) : row.min_price,
+      close: typeof row.close_price === 'string' ? parseFloat(row.close_price) : row.close_price,
+    };
+  });
 }

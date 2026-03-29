@@ -102,6 +102,20 @@ export interface HistoryResponse {
   data: HistoryPoint[];
 }
 
+export interface PricePoint {
+  ts: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+export interface PriceHistoryResponse {
+  asset: Asset;
+  interval: string;
+  data: PricePoint[];
+}
+
 // ---- Regime transitions ----
 export interface RegimeTransition {
   ts: number;
